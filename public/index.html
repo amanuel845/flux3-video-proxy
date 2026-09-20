@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLUX 3 Video Playground</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #0f172a; color: #f8fafc; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+        h1 { color: #38bdf8; }
+        label { display: block; margin-top: 10px; font-weight: bold; font-size: 0.9em; color: #94a3b8; }
+        select, input, textarea { width: 100%; padding: 10px; margin-top: 5px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; box-sizing: border-box; }
+        button { background: #38bdf8; color: #0f172a; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 15px; width: 100%; font-size: 1rem; }
+        button:hover { background: #7dd3fc; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        .hidden { display: none; }
+        #status { margin-top: 15px; padding: 10px; border-radius: 6px; background: #334155; font-family: monospace; font-size: 0.9em; word-break: break-all; }
+        video { width: 100%; border-radius: 8px; margin-top: 15px; }
+        .error { color: #f87171; }
+        .success { color: #4ade80; }
+    </style>
+</head>
+<body>
+    <h1>FLUX 3 Video Proxy Playground</h1>
+    
+    <div class="card">
+        <label>Mode</label>
+        <select id="mode" onchange="toggleModeFields()">
+            <option value="t2v">Text to Video (t2v)</option>
+            <option value="i2v">Image to Video (i2v)</option>
+            <option value="v2v">Video Continuation (v2v)</option>
+            <option value="draft_enhance">Draft Enhance</option>
+        </select>
+
+        <label>Prompt</label>
+        <textarea id="prompt" rows="3" placeholder="Describe the scene...">A futuristic drone flies over a neon city.</textarea>
+
+        <div id="image-field" class="hidden">
+            <label>Opening Frame (Image to Base64)</label>
+            <input type="file" id="imageFile" accept="image/*" onchange="handleFile('imageFile', 'keyframes')">
+            <input type="hidden" id="keyframes" value="">
+        </div>
+
+        <div id="video-field" class="hidden">
+            <label>Start Video (Video to Base64)</label>
+            <input type="file" id="videoFile" accept="video/mp4" onchange="handleFile('videoFile', 'start_video')">
+            <input type="hidden" id="start_video" value="">
+        </div>
+
+        <div id="draft-field" class="hidden">
+            <label>Draft Cache URL</label>
+            <input type="text" id="draft_cache" placeholder="https://...">
+        </div>
+
+        <label>Duration (5-20s)</label>
+        <input type="number" id="duration" value="8" min="5" max="20">
+
+        <label>Aspect Ratio</label>
+        <select id="aspect_ratio">
+            <option value="auto">auto</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+            <option value="1:1">1:1</option>
+        </select>
+
+        <button id="generateBtn" onclick="submitRequest()">Generate Video</button>
+    </div>
+
+    <div class="card">
+        <h2>Output</h2>
+        <div id="status">Waiting for request...</div>
+        <div id="video-container"></div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api';
+
+        function toggleModeFields() {
+            const mode = document.getElementById('mode').value;
+            document.getElementById('image-field').classList.toggle('hidden', mode !== 'i2v');
+            document.getElementById('video-field').classList.toggle('hidden', mode !== 'v2v');
+            document.getElementById('draft-field').classList.toggle('hidden', mode !== 'draft_enhance');
+            document.getElementById('prompt').parentElement.classList.toggle('hidden', mode === 'draft_enhance');
+        }
+
+        function handleFile(inputId, targetHiddenId) {
+            const file = document.getElementById(inputId).files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById(targetHiddenId).value = e.target.result;
+                document.getElementById('status').innerText = `File loaded: ${file.name}`;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function submitRequest() {
+            const btn = document.getElementById('generateBtn');
+            const statusDiv = document.getElementById('status');
+            const videoContainer = document.getElementById('video-container');
+            
+            btn.disabled = true;
+            statusDiv.innerHTML = 'Submitting request to BFL...';
+            videoContainer.innerHTML = '';
+
+            const mode = document.getElementById('mode').value;
+            const payload = {
+                mode: mode,
+                prompt: document.getElementById('prompt').value,
+                duration: parseInt(document.getElementById('duration').value),
+                aspect_ratio: document.getElementById('aspect_ratio').value,
+                generate_audio: true,
+                safety_tolerance: 2
+            };
+
+            if (mode === 'i2v') payload.keyframes = document.getElementById('keyframes').value;
+            if (mode === 'v2v') payload.start_video = document.getElementById('start_video').value;
+            if (mode === 'draft_enhance') payload.draft_cache = document.getElementById('draft_cache').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) throw new Error(data.error || 'Failed to submit');
+                
+                statusDiv.innerHTML = `<span class="success">Task Submitted! ID: ${data.id}</span><br>Cost: ${data.cost} credits. Polling for result...`;
+                pollStatus(data.polling_url);
+            } catch (error) {
+                statusDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+                btn.disabled = false;
+            }
+        }
+
+        async function pollStatus(pollingUrl) {
+            const statusDiv = document.getElementById('status');
+            try {
+                const response = await fetch(`${API_BASE}/status?url=${encodeURIComponent(pollingUrl)}`);
+                const data = await response.json();
+
+                if (data.status === 'Ready') {
+                    statusDiv.innerHTML = '<span class="success">Video Ready!</span>';
+                    const videoUrl = data.result.video_url;
+                    document.getElementById('video-container').innerHTML = `
+                        <video controls autoplay loop src="${videoUrl}"></video>
+                        <p><a href="${videoUrl}" target="_blank" style="color:#38bdf8;">Download Video</a></p>
+                    `;
+                    document.getElementById('generateBtn').disabled = false;
+                } else if (data.status === 'Error') {
+                    throw new Error('BFL generation failed');
+                } else {
+                    statusDiv.innerHTML = `Status: ${data.status}... (checking again in 3s)`;
+                    setTimeout(() => pollStatus(pollingUrl), 3000);
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<span class="error">Polling Error: ${error.message}</span>`;
+                document.getElementById('generateBtn').disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
