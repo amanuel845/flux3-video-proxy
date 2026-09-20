@@ -1,0 +1,9 @@
+{
+  "name": "flux3-video-proxy",
+  "version": "1.0.0",
+  "description": "Proxy API for Black Forest Labs FLUX 3 Video",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
